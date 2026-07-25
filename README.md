@@ -1,11 +1,12 @@
 # Tg Web3 Digest
 
-A digest generation project that collects sources, formats updates, and delivers summaries.
+Telegram Web3 digest bot that collects Web3/news sources, builds digest messages, and sends them to Telegram. It is focused on source aggregation and digest delivery, not trading execution.
 
 ## Features
 
-- Telegram bot command handling and operational notifications.
-- Persistent storage for state, logs, or domain data.
+- Collects Web3/news inputs for digest creation.
+- Formats and sends Telegram digest outputs.
+- Documents deployment, scheduling, and source/API configuration.
 
 ## Architecture
 
