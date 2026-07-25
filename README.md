@@ -1,81 +1,72 @@
-# TG Web3 Digest
+# Tg Web3 Digest
 
-Telegram digest pipeline for collecting Web3 messages from subscribed channels and sending scheduled summaries to a target Telegram group or chat.
-
-The system uses a Telegram user session through Telethon, stores collected messages in SQLite, and sends digests on a configurable schedule.
+A digest generation project that collects sources, formats updates, and delivers summaries.
 
 ## Features
 
-- Telegram channel collection via Telethon.
-- Supports explicit channel lists or all channels subscribed by the reader account.
-- SQLite storage.
-- Scheduled digests by local timezone.
-- Railway entrypoint and systemd units.
-- Separate collector and sender sessions to reduce lock contention.
+- Telegram bot command handling and operational notifications.
+- Persistent storage for state, logs, or domain data.
 
-## Environment
+## Architecture
 
-```bash
-cp .env.example .env
-```
+- **Repository:** `MilaArtyNew/tg-web3-digest`
+- **Primary stack:** Python, systemd, Railway
+- **Entrypoints and scripts:**
+  - `main.py`
+- **Notable dependencies:** `APScheduler`, `pytz`, `telethon`
 
-Required variables:
+## Configuration
 
-- `TG_API_ID` — Telegram API ID from `my.telegram.org`.
-- `TG_API_HASH` — Telegram API hash from `my.telegram.org`.
-- `TG_SESSION_STRING` — Telethon StringSession.
-- `TG_CHANNELS` — comma-separated channels or `ALL`.
-- `TG_TARGET` — destination chat/group name or username.
-- `DB_PATH` — SQLite database path.
-- `POLL_SECONDS` — collector poll interval.
-- `SEND_HOURS` — comma-separated local hours.
-- `TZ_DIGEST` — digest timezone.
-- `MAX_ITEMS` — max items per digest.
-- `MAX_CHARS_PER_ITEM` — max characters per item.
+Configure the service with environment variables. Do not commit real secrets to the repository.
 
-## Local Setup
+- `TG_API_HASH` — required or optional runtime configuration. See deployment environment for the actual value.
+- `TG_API_ID` — required or optional runtime configuration. See deployment environment for the actual value.
+
+## Setup
 
 ```bash
+git clone https://github.com/MilaArtyNew/tg-web3-digest
+cd tg-web3-digest
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env
-nano .env
-python3 db_init.py
 ```
 
-## First Telethon Login
-
-Run the sender once to generate or validate the Telethon session:
+## Running Locally
 
 ```bash
-source .venv/bin/activate
-export $(grep -v '^#' .env | xargs)
-python3 tg_digest_sender.py
+python main.py
 ```
 
-On first run, Telethon asks for the reader account phone and login code. Keep the generated session safe.
+## Bot Commands
 
-## Manual Test
+No interactive Telegram commands were detected automatically. If this service sends alerts only, document the operational controls here when they are added.
 
-```bash
-python3 tg_digest_collector.py
-python3 tg_digest_sender.py
-```
+If a command requires extra input and the argument is missing, the bot should ask a follow-up question instead of failing silently.
 
-Confirm the digest appears in the configured target chat.
+## Deployment Notes
 
-## Deployment
+- Keep secrets in the deployment platform environment variables, not in Git.
+- Use the default branch as the source of truth for deployments.
+- Check logs after every deployment and verify the `/status` or health endpoint when available.
+- If the project uses a scheduler, verify timezone assumptions and idempotency before enabling it in production.
 
-Available deployment options:
+## Operational Notes
 
-- Railway through `main.py` and `railway.toml`.
-- systemd through files in `systemd/`.
+- Review logs after startup for missing environment variables or API authentication errors.
+- Keep command names in English and document every user-facing command in this README.
+- For Telegram bots, `/help` should list the same commands documented here.
+- Inline buttons should edit the original message with the final status rather than sending duplicate messages.
 
-For full VPS/systemd details, see [`README_SETUP.md`](./README_SETUP.md).
+## Troubleshooting
+
+- **Bot does not respond:** verify the bot token, webhook/polling mode, and chat permissions.
+- **Missing data:** check API keys, rate limits, and upstream service status.
+- **Deployment starts but exits:** inspect platform logs for missing environment variables or import errors.
+- **Commands differ from README:** update the command list here and in the bot command menu at the same time.
 
 ## Security
 
-- Do not commit `.env` or Telethon session files.
-- Treat `TG_SESSION_STRING` like a password.
-- Use a dedicated reader account where possible.
+- Never commit `.env` files, API keys, private keys, Telegram tokens, or session strings.
+- Use `.env.example` for placeholders only.
+- Rotate any credential that was accidentally committed.
