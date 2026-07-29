@@ -22,6 +22,16 @@ Configure the service with environment variables. Do not commit real secrets to 
 
 - `TG_API_HASH` — required or optional runtime configuration. See deployment environment for the actual value.
 - `TG_API_ID` — required or optional runtime configuration. See deployment environment for the actual value.
+- `SOURCES_CONFIG` — optional path to `sources.json` for grouping digest output into Smart/Core/Other blocks. Defaults to `sources.json` next to `tg_digest_sender.py`.
+- `MAX_ITEMS_PER_BLOCK` — optional per-block item cap for Smart/Core/Other. Defaults to `6`.
+
+### Digest blocks
+
+The sender groups output into three blocks:
+
+1. `Smart` — channels listed in `sources.json` under `smart`.
+2. `Core` — channels listed in `sources.json` under `core`.
+3. `Other` — every other subscribed/read channel.
 
 ## Setup
 

@@ -1,6 +1,8 @@
+import json
 import os
 import re
 import sqlite3
+from pathlib import Path
 from datetime import datetime, timedelta, timezone
 
 from telethon import TelegramClient
@@ -18,6 +20,11 @@ TG_TARGET = os.environ["TG_TARGET"]
 
 MAX_ITEMS = int(os.environ.get("MAX_ITEMS", "12"))
 MAX_CHARS_PER_ITEM = int(os.environ.get("MAX_CHARS_PER_ITEM", "220"))
+MAX_ITEMS_PER_BLOCK = int(os.environ.get("MAX_ITEMS_PER_BLOCK", "6"))
+SOURCES_CONFIG = os.environ.get(
+    "SOURCES_CONFIG",
+    str(Path(__file__).with_name("sources.json")),
+)
 
 LINK_RE = re.compile(r"https?://\S+", re.IGNORECASE)
 
@@ -80,6 +87,50 @@ def clean_text(t):
     t = t.strip()
     t = re.sub(r"\s+", " ", t)
     return t
+
+
+def normalize_channel_name(channel):
+    """Normalize Telegram channel labels to compare saved DB labels with sources.json."""
+    ch = (channel or "").strip()
+    ch = re.sub(r"^https?://t\.me/", "", ch, flags=re.IGNORECASE)
+    ch = ch.lstrip("@")
+    return ch.lower()
+
+
+def load_source_groups():
+    """Return normalized sets for smart/core source grouping.
+
+    sources.json shape:
+    {
+      "smart": ["channel1", "@channel2"],
+      "core": ["channel3"]
+    }
+    Missing/invalid config is non-fatal: everything goes to Other.
+    """
+    groups = {"smart": set(), "core": set()}
+    try:
+        with open(SOURCES_CONFIG, "r", encoding="utf-8") as f:
+            raw = json.load(f)
+    except FileNotFoundError:
+        return groups
+    except Exception:
+        return groups
+
+    for group_name in groups:
+        for channel in raw.get(group_name, []):
+            normalized = normalize_channel_name(str(channel))
+            if normalized:
+                groups[group_name].add(normalized)
+    return groups
+
+
+def source_group(channel, groups):
+    normalized = normalize_channel_name(channel)
+    if normalized in groups.get("smart", set()):
+        return "smart"
+    if normalized in groups.get("core", set()):
+        return "core"
+    return "other"
 
 
 def is_noise(t):
@@ -147,15 +198,18 @@ def dedupe(items):
 
 def format_item(it):
     text = it["text"]
+    link_match = LINK_RE.search(it["text"])
     if len(text) > MAX_CHARS_PER_ITEM:
         text = text[: MAX_CHARS_PER_ITEM - 1] + "…"
     ch = it["channel"]
-    m = LINK_RE.search(it["text"])
-    link = f" {m.group(0)}" if m else ""
+    link = ""
+    if link_match and link_match.group(0) not in text:
+        link = f" {link_match.group(0)}"
     return f"- {text}{link} ({ch})"
 
 
 def build_digest(rows, start_utc, end_utc):
+    source_groups = load_source_groups()
     items = []
     for channel, msg_id, date_utc, text in rows:
         t = clean_text(text)
@@ -168,12 +222,17 @@ def build_digest(rows, start_utc, end_utc):
                 "date": parse_dt(date_utc),
                 "text": t,
                 "score": score_signal(t),
+                "group": source_group(channel, source_groups),
             }
         )
 
     items = dedupe(items)
-    items.sort(key=lambda x: (x["score"], x["date"]), reverse=True)
-    items = items[:MAX_ITEMS]
+    grouped = {"smart": [], "core": [], "other": []}
+    for item in items:
+        grouped[item["group"]].append(item)
+
+    for group_items in grouped.values():
+        group_items.sort(key=lambda x: (x["score"], x["date"]), reverse=True)
 
     header = (
         f"Web3 Digest "
@@ -181,11 +240,23 @@ def build_digest(rows, start_utc, end_utc):
         f"{end_utc.astimezone(timezone.utc).strftime('%H:%M')} UTC)"
     )
 
-    if not items:
+    if not any(grouped.values()):
         return header + "\n\nНет новых сигналов."
 
-    body = "\n".join(format_item(it) for it in items)
-    return header + "\n\n" + body
+    block_specs = [
+        ("smart", "🧠 Smart"),
+        ("core", "💎 Core"),
+        ("other", "🗂 Other"),
+    ]
+    blocks = []
+    for group_key, title in block_specs:
+        block_items = grouped[group_key][:MAX_ITEMS_PER_BLOCK]
+        if not block_items:
+            continue
+        body = "\n".join(format_item(it) for it in block_items)
+        blocks.append(f"{title}\n{body}")
+
+    return header + "\n\n" + "\n\n".join(blocks)
 
 
 async def resolve_target_by_name(client, target_name):
