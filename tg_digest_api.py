@@ -73,6 +73,8 @@ def build_messages_debug(query):
     cur = con.cursor()
     cur.execute("SELECT COUNT(*), MIN(date_utc), MAX(date_utc) FROM messages")
     total_count, min_date, max_date = cur.fetchone()
+    cur.execute("SELECT key, value FROM state WHERE key LIKE 'collector:%' OR key LIKE 'digest:%' ORDER BY key")
+    state = dict(cur.fetchall())
     cur.execute(
         """
         SELECT channel, msg_id, date_utc, text
@@ -98,6 +100,7 @@ def build_messages_debug(query):
         "total_messages": total_count,
         "first_message_utc": min_date,
         "last_message_utc": max_date,
+        "state": state,
         "window_raw_rows": len(rows),
         "window_after_noise_filter": len(after_noise),
         "window_channels": len(by_channel),
@@ -110,12 +113,19 @@ def build_messages_debug(query):
 
 _main_loop = None
 _send_callback = None
+_collect_callback = None
 
 
 def register_send_callback(loop, callback):
     global _main_loop, _send_callback
     _main_loop = loop
     _send_callback = callback
+
+
+def register_collect_callback(loop, callback):
+    global _main_loop, _collect_callback
+    _main_loop = loop
+    _collect_callback = callback
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -186,6 +196,17 @@ class Handler(BaseHTTPRequestHandler):
         # POST /send → trigger digest sender immediately
         if path == "send" and _main_loop and _send_callback:
             asyncio.run_coroutine_threadsafe(_send_callback(), _main_loop)
+            body = b'{"ok": true}'
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", len(body))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
+        # POST /collect → trigger collector immediately
+        if path == "collect" and _main_loop and _collect_callback:
+            asyncio.run_coroutine_threadsafe(_collect_callback(), _main_loop)
             body = b'{"ok": true}'
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
