@@ -17,6 +17,7 @@ SESSION = StringSession(_session_str) if _session_str and len(_session_str) > 50
 CHANNELS = [c.strip() for c in os.environ["TG_CHANNELS"].split(",") if c.strip()]
 DB_PATH = os.environ.get("DB_PATH", "tg_digest.sqlite3")
 ALL_CHANNELS_MODE = len(CHANNELS) == 1 and CHANNELS[0].lower() in {"all", "*"}
+SEED_EMPTY_CHANNELS = os.environ.get("SEED_EMPTY_CHANNELS", "true").lower() in {"1", "true", "yes", "on"}
 
 
 def open_db():
@@ -111,6 +112,15 @@ async def run():
 
         for channel_key, channel_label, entity in sources:
             last_id = get_last_id(con, channel_key)
+            if last_id == 0 and SEED_EMPTY_CHANNELS:
+                latest_id = 0
+                async for msg in client.iter_messages(entity, limit=1):
+                    latest_id = msg.id
+                    break
+                if latest_id:
+                    set_last_id(con, channel_key, latest_id)
+                continue
+
             new_last = last_id
             try:
                 async for msg in client.iter_messages(entity, min_id=last_id, reverse=True):
