@@ -210,7 +210,27 @@ def format_item(it):
     return f"- {text}{link} ({ch})"
 
 
-def build_digest(rows, start_utc, end_utc):
+def _append_digest_line(messages, current, line):
+    """Append a line, starting a new Telegram message if needed."""
+    separator = "\n" if current else ""
+    candidate = current + separator + line
+    if len(candidate) <= TG_MESSAGE_CHAR_LIMIT:
+        return messages, candidate
+
+    if current:
+        messages.append(current)
+        current = line
+    else:
+        current = line
+
+    # A single formatted item should normally be well below the limit because
+    # MAX_CHARS_PER_ITEM caps text, but keep a hard safety guard for very long URLs.
+    if len(current) > TG_MESSAGE_CHAR_LIMIT:
+        current = current[: TG_MESSAGE_CHAR_LIMIT - 1] + "…"
+    return messages, current
+
+
+def build_digest_messages(rows, start_utc, end_utc):
     source_groups = load_source_groups()
     items = []
     for channel, msg_id, date_utc, text in rows:
@@ -243,42 +263,48 @@ def build_digest(rows, start_utc, end_utc):
     )
 
     if not any(grouped.values()):
-        return header + "\n\nНет новых сигналов."
+        return [header + "\n\nНет новых сигналов."]
 
     block_specs = [
         ("smart", "🧠 Smart"),
         ("core", "💎 Core"),
         ("other", "🗂 Other"),
     ]
-    blocks = []
-    omitted_total = 0
+    messages = []
     current = header
 
     for group_key, title in block_specs:
-        group_items = grouped[group_key]
-        if not group_items:
+        block_items = grouped[group_key][:MAX_ITEMS_PER_BLOCK]
+        if not block_items:
             continue
 
-        block_lines = []
-        for idx, item in enumerate(group_items[:MAX_ITEMS_PER_BLOCK]):
+        block_started = False
+        for item in block_items:
             line = format_item(item)
-            candidate_block = f"{title}\n" + "\n".join(block_lines + [line])
-            candidate_digest = current + "\n\n" + "\n\n".join(blocks + [candidate_block])
-            if len(candidate_digest) > TG_MESSAGE_CHAR_LIMIT:
-                omitted_total += len(group_items[idx:MAX_ITEMS_PER_BLOCK])
-                break
-            block_lines.append(line)
+            if not block_started:
+                line = f"\n{title}\n{line}"
+                block_started = True
+            messages, current = _append_digest_line(messages, current, line)
 
-        omitted_total += max(0, len(group_items) - MAX_ITEMS_PER_BLOCK)
-        if block_lines:
-            blocks.append(f"{title}\n" + "\n".join(block_lines))
+    if current:
+        messages.append(current)
 
-    digest = header + "\n\n" + "\n\n".join(blocks)
-    if omitted_total:
-        suffix = f"\n\n…ещё {omitted_total} item(s) пропущены из-за лимита Telegram."
-        if len(digest) + len(suffix) <= TG_MESSAGE_CHAR_LIMIT:
-            digest += suffix
-    return digest
+    if len(messages) > 1:
+        total = len(messages)
+        labelled = []
+        for idx, message in enumerate(messages, start=1):
+            suffix = f"\n\n(part {idx}/{total})"
+            if len(message) + len(suffix) <= TG_MESSAGE_CHAR_LIMIT:
+                message += suffix
+            labelled.append(message)
+        messages = labelled
+
+    return messages
+
+
+def build_digest(rows, start_utc, end_utc):
+    """Backward-compatible single-string digest for local previews/tests."""
+    return "\n\n".join(build_digest_messages(rows, start_utc, end_utc))
 
 
 async def resolve_target_by_name(client, target_name):
@@ -318,13 +344,14 @@ async def run():
     )
     rows = cur.fetchall()
 
-    digest = build_digest(rows, start, end)
+    digests = build_digest_messages(rows, start, end)
 
     client = TelegramClient(SESSION, API_ID, API_HASH)
     await client.start()
 
     target_entity = await resolve_target_by_name(client, TG_TARGET)
-    await client.send_message(target_entity, digest)
+    for digest in digests:
+        await client.send_message(target_entity, digest)
 
     set_state(con, "digest:last_sent_utc", end.isoformat())
     con.close()
