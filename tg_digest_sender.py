@@ -21,6 +21,8 @@ TG_TARGET = os.environ["TG_TARGET"]
 MAX_ITEMS = int(os.environ.get("MAX_ITEMS", "12"))
 MAX_CHARS_PER_ITEM = int(os.environ.get("MAX_CHARS_PER_ITEM", "220"))
 MAX_ITEMS_PER_BLOCK = int(os.environ.get("MAX_ITEMS_PER_BLOCK", "6"))
+# Telegram hard-limit is 4096 chars. Keep margin for Unicode/link rendering.
+TG_MESSAGE_CHAR_LIMIT = int(os.environ.get("TG_MESSAGE_CHAR_LIMIT", "3900"))
 SOURCES_CONFIG = os.environ.get(
     "SOURCES_CONFIG",
     str(Path(__file__).with_name("sources.json")),
@@ -249,14 +251,34 @@ def build_digest(rows, start_utc, end_utc):
         ("other", "🗂 Other"),
     ]
     blocks = []
-    for group_key, title in block_specs:
-        block_items = grouped[group_key][:MAX_ITEMS_PER_BLOCK]
-        if not block_items:
-            continue
-        body = "\n".join(format_item(it) for it in block_items)
-        blocks.append(f"{title}\n{body}")
+    omitted_total = 0
+    current = header
 
-    return header + "\n\n" + "\n\n".join(blocks)
+    for group_key, title in block_specs:
+        group_items = grouped[group_key]
+        if not group_items:
+            continue
+
+        block_lines = []
+        for idx, item in enumerate(group_items[:MAX_ITEMS_PER_BLOCK]):
+            line = format_item(item)
+            candidate_block = f"{title}\n" + "\n".join(block_lines + [line])
+            candidate_digest = current + "\n\n" + "\n\n".join(blocks + [candidate_block])
+            if len(candidate_digest) > TG_MESSAGE_CHAR_LIMIT:
+                omitted_total += len(group_items[idx:MAX_ITEMS_PER_BLOCK])
+                break
+            block_lines.append(line)
+
+        omitted_total += max(0, len(group_items) - MAX_ITEMS_PER_BLOCK)
+        if block_lines:
+            blocks.append(f"{title}\n" + "\n".join(block_lines))
+
+    digest = header + "\n\n" + "\n\n".join(blocks)
+    if omitted_total:
+        suffix = f"\n\n…ещё {omitted_total} item(s) пропущены из-за лимита Telegram."
+        if len(digest) + len(suffix) <= TG_MESSAGE_CHAR_LIMIT:
+            digest += suffix
+    return digest
 
 
 async def resolve_target_by_name(client, target_name):

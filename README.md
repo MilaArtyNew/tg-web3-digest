@@ -24,6 +24,7 @@ Configure the service with environment variables. Do not commit real secrets to 
 - `TG_API_ID` — required or optional runtime configuration. See deployment environment for the actual value.
 - `SOURCES_CONFIG` — optional path to `sources.json` for grouping digest output into Smart/Core/Other blocks. Defaults to `sources.json` next to `tg_digest_sender.py`.
 - `MAX_ITEMS_PER_BLOCK` — optional per-block item cap for Smart/Core/Other. Defaults to `6`.
+- `TG_MESSAGE_CHAR_LIMIT` — optional Telegram safety cap. Defaults to `3900` chars to stay below Telegram's 4096-char message limit.
 
 ### Digest blocks
 
