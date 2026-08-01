@@ -18,9 +18,14 @@ MAX_PER_FILE = 500
 # prune the oldest day first, then write/refresh the current day. This avoids a
 # transient 11th day on Railway's small Volume.
 RETENTION_DAYS = int(os.environ.get("RETENTION_DAYS", "10"))
-_REQUESTED_EXPORT_DAYS = int(os.environ.get("EXPORT_DAYS", str(RETENTION_DAYS)))
-EXPORT_DAYS_HARD_CAP = int(os.environ.get("EXPORT_DAYS_HARD_CAP", str(RETENTION_DAYS)))
-EXPORT_DAYS = min(_REQUESTED_EXPORT_DAYS, EXPORT_DAYS_HARD_CAP, RETENTION_DAYS)
+
+# Legacy env compatibility: Railway may still have EXPORT_DAYS=30 or an old
+# EXPORT_DAYS_HARD_CAP=8 from the incident recovery. The effective retention is
+# controlled by RETENTION_DAYS so stale env cannot silently lower or raise the
+# rolling window Liudmila requested.
+_LEGACY_EXPORT_DAYS = os.environ.get("EXPORT_DAYS")
+_LEGACY_EXPORT_DAYS_HARD_CAP = os.environ.get("EXPORT_DAYS_HARD_CAP")
+EXPORT_DAYS = RETENTION_DAYS
 
 
 def export_date_from_filename(path: Path) -> str:
