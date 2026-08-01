@@ -56,6 +56,70 @@ def json_response(handler: BaseHTTPRequestHandler, payload, status=200):
     handler.wfile.write(body)
 
 
+def dir_size(path: Path) -> int:
+    if not path.exists():
+        return 0
+    total = 0
+    for item in path.rglob("*"):
+        if item.is_file():
+            try:
+                total += item.stat().st_size
+            except OSError:
+                pass
+    return total
+
+
+def storage_debug():
+    paths = {
+        "data": Path(DB_PATH).parent,
+        "sources": Path(SOURCES_DIR),
+        "db": Path(DB_PATH),
+        "db_wal": Path(DB_PATH + "-wal"),
+        "db_shm": Path(DB_PATH + "-shm"),
+    }
+    usage = {}
+    data_path = paths["data"]
+    if data_path.exists():
+        stat = os.statvfs(data_path)
+        usage = {
+            "total_bytes": stat.f_blocks * stat.f_frsize,
+            "free_bytes": stat.f_bavail * stat.f_frsize,
+            "used_bytes": (stat.f_blocks - stat.f_bfree) * stat.f_frsize,
+        }
+    files = sorted(Path(SOURCES_DIR).glob("*.md")) if Path(SOURCES_DIR).exists() else []
+    return {
+        "usage": usage,
+        "sizes": {
+            "sources_bytes": dir_size(paths["sources"]),
+            "db_bytes": paths["db"].stat().st_size if paths["db"].exists() else 0,
+            "db_wal_bytes": paths["db_wal"].stat().st_size if paths["db_wal"].exists() else 0,
+            "db_shm_bytes": paths["db_shm"].stat().st_size if paths["db_shm"].exists() else 0,
+        },
+        "source_file_count": len(files),
+        "source_first": files[0].name if files else None,
+        "source_last": files[-1].name if files else None,
+    }
+
+
+def cleanup_storage(keep_days: int = 30):
+    today = datetime.now(timezone.utc).date()
+    keep_dates = {(today - timedelta(days=i)).isoformat() for i in range(keep_days)}
+    src = Path(SOURCES_DIR)
+    removed = []
+    if src.exists():
+        for path in src.glob("*.md"):
+            date_part = path.name.split("--part", 1)[0].removesuffix(".md")
+            if date_part not in keep_dates:
+                size = path.stat().st_size
+                path.unlink()
+                removed.append({"file": path.name, "bytes": size})
+    return {
+        "removed_count": len(removed),
+        "removed_bytes": sum(x["bytes"] for x in removed),
+        "before_after_note": "call /debug/storage after cleanup for current free space",
+    }
+
+
 def build_messages_debug(query):
     now = datetime.now(timezone.utc)
     end = iso_or_default(query.get("end", [None])[0], now)
@@ -157,6 +221,15 @@ class Handler(BaseHTTPRequestHandler):
                 json_response(self, {"error": repr(e)}, status=500)
             return
 
+        # GET /debug/storage → disk usage and source export file count
+        if path == "debug/storage":
+            try:
+                json_response(self, storage_debug())
+            except Exception as e:
+                log.exception("Debug storage error")
+                json_response(self, {"error": repr(e)}, status=500)
+            return
+
         # GET /list → JSON array of available .md filenames
         if path == "list":
             src = Path(SOURCES_DIR)
@@ -192,7 +265,9 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             return
 
-        path = self.path.lstrip("/")
+        parsed = urlparse(self.path)
+        path = parsed.path.lstrip("/")
+        query = parse_qs(parsed.query)
 
         # POST /send → trigger digest sender immediately
         if path == "send" and _main_loop and _send_callback:
@@ -214,6 +289,16 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", len(body))
             self.end_headers()
             self.wfile.write(body)
+            return
+
+        # POST /cleanup_storage?keep_days=30 → delete old exported markdown files from /data/sources
+        if path == "cleanup_storage":
+            try:
+                keep_days = int(query.get("keep_days", ["30"])[0])
+                json_response(self, cleanup_storage(keep_days=keep_days))
+            except Exception as e:
+                log.exception("Cleanup storage error")
+                json_response(self, {"error": repr(e)}, status=500)
             return
 
         self.send_response(404)

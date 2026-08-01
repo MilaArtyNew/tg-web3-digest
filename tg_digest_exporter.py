@@ -6,6 +6,7 @@ import logging
 import os
 import sqlite3
 from datetime import datetime, timezone, timedelta
+from pathlib import Path
 
 log = logging.getLogger(__name__)
 
@@ -13,6 +14,26 @@ DB_PATH = os.environ.get("DB_PATH", "/data/tg_digest.sqlite3")
 SOURCES_DIR = os.environ.get("SOURCES_DIR", "/data/sources")
 MAX_PER_FILE = 500
 EXPORT_DAYS = int(os.environ.get("EXPORT_DAYS", "8"))
+
+
+def prune_old_exports(today=None) -> int:
+    today = today or datetime.now(timezone.utc).date()
+    keep_dates = {(today - timedelta(days=days_back)).isoformat() for days_back in range(EXPORT_DAYS)}
+    src = Path(SOURCES_DIR)
+    if not src.exists():
+        return 0
+    removed = 0
+    for path in src.glob("*.md"):
+        date_part = path.name.split("--part", 1)[0].removesuffix(".md")
+        if date_part not in keep_dates:
+            try:
+                path.unlink()
+                removed += 1
+            except OSError:
+                log.exception("Failed to remove old export %s", path)
+    if removed:
+        log.info("Pruned %d old exported source files", removed)
+    return removed
 
 
 def export_day(con, date_str: str) -> int:
@@ -61,6 +82,7 @@ def run():
     con = sqlite3.connect(DB_PATH, timeout=30)
     con.execute("PRAGMA journal_mode=WAL")
     today = datetime.now(timezone.utc).date()
+    prune_old_exports(today)
     total = 0
     for days_back in range(EXPORT_DAYS):
         date_str = (today - timedelta(days=days_back)).isoformat()
