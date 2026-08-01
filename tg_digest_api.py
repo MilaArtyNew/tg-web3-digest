@@ -102,7 +102,7 @@ def storage_debug():
     }
 
 
-def cleanup_storage(keep_days: int = 30):
+def cleanup_storage(keep_days: int = 10):
     today = datetime.now(timezone.utc).date()
     keep_dates = {(today - timedelta(days=i)).isoformat() for i in range(keep_days)}
     src = Path(SOURCES_DIR)
@@ -121,7 +121,7 @@ def cleanup_storage(keep_days: int = 30):
     }
 
 
-def compact_db(keep_days: int = 8):
+def compact_db(keep_days: int = 10):
     db = Path(DB_PATH)
     if not db.exists():
         return {"error": "db_missing", "db_path": DB_PATH}
@@ -362,20 +362,20 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(body)
             return
 
-        # POST /cleanup_storage?keep_days=30 → delete old exported markdown files from /data/sources
+        # POST /cleanup_storage?keep_days=10 → delete old exported markdown files from /data/sources
         if path == "cleanup_storage":
             try:
-                keep_days = int(query.get("keep_days", ["30"])[0])
+                keep_days = int(query.get("keep_days", ["10"])[0])
                 json_response(self, cleanup_storage(keep_days=keep_days))
             except Exception as e:
                 log.exception("Cleanup storage error")
                 json_response(self, {"error": repr(e)}, status=500)
             return
 
-        # POST /compact_db?keep_days=8 → rebuild SQLite with recent rows + preserved state cursors
+        # POST /compact_db?keep_days=10 → rebuild SQLite with recent rows + preserved state cursors
         if path == "compact_db":
             try:
-                keep_days = int(query.get("keep_days", ["8"])[0])
+                keep_days = int(query.get("keep_days", ["10"])[0])
                 json_response(self, compact_db(keep_days=keep_days))
             except Exception as e:
                 log.exception("Compact DB error")

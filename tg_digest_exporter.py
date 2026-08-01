@@ -13,9 +13,18 @@ log = logging.getLogger(__name__)
 DB_PATH = os.environ.get("DB_PATH", "/data/tg_digest.sqlite3")
 SOURCES_DIR = os.environ.get("SOURCES_DIR", "/data/sources")
 MAX_PER_FILE = 500
-_REQUESTED_EXPORT_DAYS = int(os.environ.get("EXPORT_DAYS", "8"))
-EXPORT_DAYS_HARD_CAP = int(os.environ.get("EXPORT_DAYS_HARD_CAP", "8"))
-EXPORT_DAYS = min(_REQUESTED_EXPORT_DAYS, EXPORT_DAYS_HARD_CAP)
+
+# Retention policy: keep a rolling 10-day window. When a new day is exported,
+# prune the oldest day first, then write/refresh the current day. This avoids a
+# transient 11th day on Railway's small Volume.
+RETENTION_DAYS = int(os.environ.get("RETENTION_DAYS", "10"))
+_REQUESTED_EXPORT_DAYS = int(os.environ.get("EXPORT_DAYS", str(RETENTION_DAYS)))
+EXPORT_DAYS_HARD_CAP = int(os.environ.get("EXPORT_DAYS_HARD_CAP", str(RETENTION_DAYS)))
+EXPORT_DAYS = min(_REQUESTED_EXPORT_DAYS, EXPORT_DAYS_HARD_CAP, RETENTION_DAYS)
+
+
+def export_date_from_filename(path: Path) -> str:
+    return path.name.split("--part", 1)[0].removesuffix(".md")
 
 
 def prune_old_exports(today=None) -> int:
@@ -26,7 +35,7 @@ def prune_old_exports(today=None) -> int:
         return 0
     removed = 0
     for path in src.glob("*.md"):
-        date_part = path.name.split("--part", 1)[0].removesuffix(".md")
+        date_part = export_date_from_filename(path)
         if date_part not in keep_dates:
             try:
                 path.unlink()
@@ -38,6 +47,32 @@ def prune_old_exports(today=None) -> int:
     return removed
 
 
+def prune_old_messages(con, today=None) -> int:
+    today = today or datetime.now(timezone.utc).date()
+    cutoff = today - timedelta(days=EXPORT_DAYS - 1)
+    cutoff_iso = f"{cutoff.isoformat()}T00:00:00+00:00"
+    cur = con.execute("DELETE FROM messages WHERE date_utc < ?", (cutoff_iso,))
+    con.commit()
+    removed = cur.rowcount if cur.rowcount is not None else 0
+    if removed:
+        log.info("Pruned %d old SQLite messages before %s", removed, cutoff_iso)
+    return removed
+
+
+def remove_existing_export_files(date_str: str) -> int:
+    """Remove stale parts for a day before writing a fresh export for that day."""
+    src = Path(SOURCES_DIR)
+    if not src.exists():
+        return 0
+    removed = 0
+    for path in src.glob(f"{date_str}*.md"):
+        if export_date_from_filename(path) != date_str:
+            continue
+        path.unlink()
+        removed += 1
+    return removed
+
+
 def export_day(con, date_str: str) -> int:
     rows = con.execute(
         "SELECT channel, date_utc, text FROM messages "
@@ -45,8 +80,10 @@ def export_day(con, date_str: str) -> int:
         (f"{date_str}T00:00:00+00:00", f"{date_str}T23:59:59+00:00"),
     ).fetchall()
     if not rows:
+        remove_existing_export_files(date_str)
         return 0
 
+    remove_existing_export_files(date_str)
     parts = [rows[i: i + MAX_PER_FILE] for i in range(0, len(rows), MAX_PER_FILE)]
     for part_idx, part in enumerate(parts):
         suffix = f"--part{part_idx + 1}" if len(parts) > 1 else ""
@@ -84,7 +121,9 @@ def run():
     con = sqlite3.connect(DB_PATH, timeout=30)
     con.execute("PRAGMA journal_mode=WAL")
     today = datetime.now(timezone.utc).date()
+    # Rotate first: remove the oldest day/files/rows before writing today's export.
     prune_old_exports(today)
+    prune_old_messages(con, today)
     total = 0
     for days_back in range(EXPORT_DAYS):
         date_str = (today - timedelta(days=days_back)).isoformat()
