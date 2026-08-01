@@ -8,6 +8,7 @@ import logging
 import os
 import re
 import sqlite3
+import threading
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -204,9 +205,9 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(body)
             return
 
-        # POST /collect → trigger collector immediately
-        if path == "collect" and _main_loop and _collect_callback:
-            asyncio.run_coroutine_threadsafe(_collect_callback(), _main_loop)
+        # POST /collect → trigger collector immediately in its own thread
+        if path == "collect" and _collect_callback:
+            threading.Thread(target=lambda: asyncio.run(_collect_callback()), daemon=True).start()
             body = b'{"ok": true}'
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
