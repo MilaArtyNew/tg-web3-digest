@@ -13,7 +13,9 @@ log = logging.getLogger(__name__)
 DB_PATH = os.environ.get("DB_PATH", "/data/tg_digest.sqlite3")
 SOURCES_DIR = os.environ.get("SOURCES_DIR", "/data/sources")
 MAX_PER_FILE = 500
-EXPORT_DAYS = int(os.environ.get("EXPORT_DAYS", "8"))
+_REQUESTED_EXPORT_DAYS = int(os.environ.get("EXPORT_DAYS", "8"))
+EXPORT_DAYS_HARD_CAP = int(os.environ.get("EXPORT_DAYS_HARD_CAP", "8"))
+EXPORT_DAYS = min(_REQUESTED_EXPORT_DAYS, EXPORT_DAYS_HARD_CAP)
 
 
 def prune_old_exports(today=None) -> int:

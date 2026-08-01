@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import sqlite3
 import threading
 from datetime import datetime, timedelta, timezone
@@ -117,6 +118,76 @@ def cleanup_storage(keep_days: int = 30):
         "removed_count": len(removed),
         "removed_bytes": sum(x["bytes"] for x in removed),
         "before_after_note": "call /debug/storage after cleanup for current free space",
+    }
+
+
+def compact_db(keep_days: int = 8):
+    db = Path(DB_PATH)
+    if not db.exists():
+        return {"error": "db_missing", "db_path": DB_PATH}
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=keep_days)
+    cutoff_iso = cutoff.isoformat()
+    tmp_db = Path("/tmp/tg_digest_compact.sqlite3")
+    if tmp_db.exists():
+        tmp_db.unlink()
+
+    src = sqlite3.connect(DB_PATH, timeout=30)
+    src.row_factory = sqlite3.Row
+    state_rows = src.execute("SELECT key, value FROM state").fetchall()
+    recent_rows = src.execute(
+        "SELECT channel, msg_id, date_utc, text FROM messages WHERE date_utc >= ? ORDER BY id",
+        (cutoff_iso,),
+    ).fetchall()
+
+    dst = sqlite3.connect(str(tmp_db), timeout=30)
+    dst.execute("PRAGMA journal_mode=DELETE")
+    dst.execute(
+        """
+        CREATE TABLE messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            channel TEXT NOT NULL,
+            msg_id INTEGER NOT NULL,
+            date_utc TEXT NOT NULL,
+            text TEXT NOT NULL,
+            UNIQUE(channel, msg_id)
+        )
+        """
+    )
+    dst.execute("CREATE TABLE state (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+    dst.executemany(
+        "INSERT INTO messages(channel, msg_id, date_utc, text) VALUES (?, ?, ?, ?)",
+        [(r["channel"], r["msg_id"], r["date_utc"], r["text"]) for r in recent_rows],
+    )
+    dst.executemany(
+        "INSERT INTO state(key, value) VALUES(?, ?)",
+        [(r["key"], r["value"]) for r in state_rows],
+    )
+    dst.commit()
+    dst.close()
+    src.close()
+
+    old_sizes = {
+        "db_bytes": db.stat().st_size if db.exists() else 0,
+        "wal_bytes": Path(DB_PATH + "-wal").stat().st_size if Path(DB_PATH + "-wal").exists() else 0,
+        "shm_bytes": Path(DB_PATH + "-shm").stat().st_size if Path(DB_PATH + "-shm").exists() else 0,
+    }
+    for suffix in ["-wal", "-shm"]:
+        path = Path(DB_PATH + suffix)
+        if path.exists():
+            path.unlink()
+    if db.exists():
+        db.unlink()
+    shutil.copyfile(tmp_db, db)
+    tmp_db.unlink(missing_ok=True)
+    return {
+        "ok": True,
+        "keep_days": keep_days,
+        "cutoff_utc": cutoff_iso,
+        "state_rows_preserved": len(state_rows),
+        "recent_messages_preserved": len(recent_rows),
+        "old_sizes": old_sizes,
+        "new_db_bytes": db.stat().st_size,
     }
 
 
@@ -298,6 +369,16 @@ class Handler(BaseHTTPRequestHandler):
                 json_response(self, cleanup_storage(keep_days=keep_days))
             except Exception as e:
                 log.exception("Cleanup storage error")
+                json_response(self, {"error": repr(e)}, status=500)
+            return
+
+        # POST /compact_db?keep_days=8 → rebuild SQLite with recent rows + preserved state cursors
+        if path == "compact_db":
+            try:
+                keep_days = int(query.get("keep_days", ["8"])[0])
+                json_response(self, compact_db(keep_days=keep_days))
+            except Exception as e:
+                log.exception("Compact DB error")
                 json_response(self, {"error": repr(e)}, status=500)
             return
 
