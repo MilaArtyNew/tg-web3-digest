@@ -21,6 +21,7 @@ SOURCES_DIR = os.environ.get("SOURCES_DIR", "/data/sources")
 DB_PATH = os.environ.get("DB_PATH", "/data/tg_digest.sqlite3")
 API_SECRET = os.environ.get("API_SECRET", "")
 PORT = int(os.environ.get("PORT", "8080"))
+MESSAGES_API_MAX_LIMIT = int(os.environ.get("MESSAGES_API_MAX_LIMIT", "1500"))
 
 NOISE_PATTERNS = [
     r"\bjoin\s+now\b",
@@ -274,7 +275,7 @@ def build_messages_payload(query):
     end = iso_or_default(query.get("end", [None])[0], now)
     default_hours = int(query.get("hours", ["8"])[0])
     start = iso_or_default(query.get("start", [None])[0], end - timedelta(hours=default_hours))
-    limit = min(max(int(query.get("limit", ["160"])[0]), 1), 500)
+    limit = min(max(int(query.get("limit", ["160"])[0]), 1), MESSAGES_API_MAX_LIMIT)
 
     info = {
         "db_path": DB_PATH,
