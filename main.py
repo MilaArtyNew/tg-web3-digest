@@ -21,10 +21,9 @@ log = logging.getLogger(__name__)
 SEND_HOURS = [int(h) for h in os.environ.get("SEND_HOURS", "8,11,14,17").split(",")]
 TZ = pytz.timezone(os.environ.get("TZ_DIGEST", "Asia/Jerusalem"))
 DB_PATH = os.environ.get("DB_PATH", "/data/tg_digest.sqlite3")
-# Keep the legacy raw sender enabled by default until the Hermes LLM digest
-# crons are verified live. Set RAW_DIGEST_ENABLED=false in Railway env after
-# the LLM replacement is confirmed.
-RAW_DIGEST_ENABLED = os.environ.get("RAW_DIGEST_ENABLED", "true").lower() in {"1", "true", "yes", "on"}
+# Legacy raw sender is disabled by default; Hermes LLM digest crons deliver
+# synthesized digests. Set RAW_DIGEST_ENABLED=true only for temporary fallback.
+RAW_DIGEST_ENABLED = os.environ.get("RAW_DIGEST_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
 
 
 def state_set(key, value):
