@@ -25,6 +25,15 @@ Configure the service with environment variables. Do not commit real secrets to 
 - `SOURCES_CONFIG` — optional path to `sources.json` for grouping digest output into Smart/Core/Other blocks. Defaults to `sources.json` next to `tg_digest_sender.py`.
 - `MAX_ITEMS_PER_BLOCK` — optional per-block item cap for Smart/Core/Other. Defaults to `6`.
 - `TG_MESSAGE_CHAR_LIMIT` — optional Telegram safety cap. Defaults to `3900` chars to stay below Telegram's 4096-char message limit.
+- `RAW_DIGEST_ENABLED` — optional fallback switch for the old raw Telegram sender. Defaults to `true`; set to `false` after Hermes LLM digest crons are verified.
+
+### API for Hermes LLM digest
+
+Protected endpoint:
+
+- `GET /messages?start=<iso>&end=<iso>&limit=160`
+
+It returns bounded raw Telegram messages with `channel`, `msg_id`, `date_utc`, `text`, and best-effort `source_url`. Hermes cron jobs use this payload to generate aggregated TG Web3 digests and weekly reading lists instead of sending truncated raw post snippets.
 
 ### Digest blocks
 

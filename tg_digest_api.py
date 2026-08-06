@@ -247,6 +247,89 @@ def build_messages_debug(query):
         )[:20],
     }
 
+
+PUBLIC_CHANNEL_RE = re.compile(r"^[A-Za-z0-9_]{5,32}$")
+
+
+def message_source_url(channel: str, msg_id: int) -> str:
+    """Best-effort public Telegram message URL.
+
+    The collector stores channel usernames when Telegram exposes them; private
+    channels may only have a display name, so do not fabricate a link for those.
+    """
+    ch = (channel or "").strip().lstrip("@")
+    if PUBLIC_CHANNEL_RE.match(ch):
+        return f"https://t.me/{ch}/{msg_id}"
+    return ""
+
+
+def build_messages_payload(query):
+    """Return recent message text for external LLM digest generation.
+
+    This endpoint is protected by API_SECRET and is intentionally bounded so an
+    external summarizer can fetch raw candidates without direct Railway Volume
+    access or Telethon credentials.
+    """
+    now = datetime.now(timezone.utc)
+    end = iso_or_default(query.get("end", [None])[0], now)
+    default_hours = int(query.get("hours", ["8"])[0])
+    start = iso_or_default(query.get("start", [None])[0], end - timedelta(hours=default_hours))
+    limit = min(max(int(query.get("limit", ["160"])[0]), 1), 500)
+
+    info = {
+        "db_path": DB_PATH,
+        "db_exists": os.path.exists(DB_PATH),
+        "start_utc": start.isoformat(),
+        "end_utc": end.isoformat(),
+        "limit": limit,
+    }
+    if not info["db_exists"]:
+        return {**info, "error": "db_missing", "messages": []}
+
+    con = sqlite3.connect(DB_PATH, timeout=30)
+    cur = con.cursor()
+    cur.execute(
+        """
+        SELECT channel, msg_id, date_utc, text
+        FROM messages
+        WHERE date_utc > ? AND date_utc <= ?
+        ORDER BY date_utc DESC
+        LIMIT ?
+        """,
+        (start.isoformat(), end.isoformat(), limit),
+    )
+    rows = cur.fetchall()
+    con.close()
+
+    messages = []
+    by_channel = {}
+    include_noise = query.get("include_noise", ["0"])[0].lower() in {"1", "true", "yes"}
+    for channel, msg_id, date_utc, text in rows:
+        raw_text = (text or "").strip()
+        noisy = is_noise(raw_text)
+        by_channel[channel] = by_channel.get(channel, 0) + 1
+        if noisy and not include_noise:
+            continue
+        messages.append(
+            {
+                "channel": channel,
+                "msg_id": msg_id,
+                "date_utc": date_utc,
+                "text": raw_text[:4000],
+                "source_url": message_source_url(channel, msg_id),
+                "is_noise": noisy,
+            }
+        )
+
+    return {
+        **info,
+        "window_raw_rows": len(rows),
+        "window_after_noise_filter": len(messages),
+        "channels_count": len(by_channel),
+        "top_channels": sorted(by_channel.items(), key=lambda x: x[1], reverse=True)[:20],
+        "messages": messages,
+    }
+
 _main_loop = None
 _send_callback = None
 _collect_callback = None
@@ -289,6 +372,16 @@ class Handler(BaseHTTPRequestHandler):
                 json_response(self, build_messages_debug(query))
             except Exception as e:
                 log.exception("Debug messages error")
+                json_response(self, {"error": repr(e)}, status=500)
+            return
+
+        # GET /messages?start=<iso>&end=<iso>&limit=160 → bounded raw messages
+        # for external LLM digest generation. Protected by API_SECRET.
+        if path == "messages":
+            try:
+                json_response(self, build_messages_payload(query))
+            except Exception as e:
+                log.exception("Messages payload error")
                 json_response(self, {"error": repr(e)}, status=500)
             return
 
